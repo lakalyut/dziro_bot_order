@@ -35,8 +35,8 @@ BOWL_CHOICES = [
 ]
 
 load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN_TEST")
-TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID_TEST", "0"))
+TOKEN = os.getenv("BOT_TOKEN")
+TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID", "0"))
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен. Укажи его в .env")
@@ -641,4 +641,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-    
+
