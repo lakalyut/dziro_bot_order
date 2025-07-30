@@ -1,0 +1,9 @@
+services:
+  dziro_bot:
+    build: .
+    container_name: dziro_bot_order
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./stoplist.txt:/app/stoplist.txt  # сохраняем стоп-лист вне контейнера
