@@ -1,0 +1,37 @@
+name: Deploy dziro_bot_order
+
+on:
+  push:
+    branches:
+      - main  # деплой будет при пуше в main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            echo "== Переключаемся в директорию проекта =="
+            cd ~/dziro_bot_order || exit 1
+
+            echo "== Обновляем код из Git =="
+            git pull || exit 1
+
+            echo "== Собираем контейнер =="
+            docker-compose build
+
+            echo "== Перезапускаем контейнер =="
+            docker-compose up -d
+
+            echo "== Чистим старые контейнеры и образы =="
+            docker system prune -af --volumes
+
+            echo "== Деплой завершён успешно =="
