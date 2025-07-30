@@ -26,12 +26,12 @@ jobs:
             git pull || exit 1
 
             echo "== Собираем контейнер =="
-            docker-compose build
+            sudo docker-compose build
 
             echo "== Перезапускаем контейнер =="
-            docker-compose up -d
+            sudo docker-compose up -d
 
             echo "== Чистим старые контейнеры и образы =="
-            docker system prune -af --volumes
+            sudo docker system prune -af --volumes
 
             echo "== Деплой завершён успешно =="
