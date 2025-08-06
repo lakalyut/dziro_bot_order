@@ -3,13 +3,13 @@ name: Deploy dziro_bot_order
 on:
   push:
     branches:
-      - main  # деплой будет при пуше в main
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Deploy via SSH
@@ -19,19 +19,26 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            echo "== Переключаемся в директорию проекта =="
+            set -e
+
+            echo "== Переключаемся в проект =="
             cd ~/dziro_bot_order || exit 1
 
-            echo "== Обновляем код из Git =="
-            git pull || exit 1
+            echo "== Обновляем код =="
+            git pull
 
-            echo "== Собираем контейнер =="
+            echo "== Собираем образ =="
             sudo docker-compose build
 
-            echo "== Перезапускаем контейнер =="
+            echo "== Останавливаем старый контейнер =="
+            sudo docker-compose down || true
+
+            echo "== Запускаем бот (foreground) =="
             sudo docker-compose up -d
 
-            echo "== Чистим старые контейнеры и образы =="
-            sudo docker system prune -af --volumes
+            echo "== Проверяем статус =="
+            sleep 3
+            sudo docker ps --format 'table {{.Names}}\t{{.Status}}'
 
-            echo "== Деплой завершён успешно =="
+            echo "== Чистим мусор =="
+            sudo docker system prune -af --volumes
