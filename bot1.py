@@ -23,7 +23,7 @@ STRENGTH_CHOICES = [
 ]
 DRAFT_CHOICES = [["Union", "Yapona", "Wookah"]]
 BOWL_CHOICES = [
-    [InlineKeyboardButton("Хайп Т", callback_data="bowl_Хайп Т"),
+    [InlineKeyboardButton("Хайп", callback_data="bowl_Хайп Т"),
      InlineKeyboardButton("Япона Т", callback_data="bowl_Япона Т")],
     [InlineKeyboardButton("Концептик", callback_data="bowl_Концептик"),
      InlineKeyboardButton("Фанел", callback_data="bowl_Фанел")],
