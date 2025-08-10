@@ -1,45 +1,31 @@
 
-import os
 import time
-from dotenv import load_dotenv
 from telegram import (
-    Update, ReplyKeyboardMarkup, ReplyKeyboardRemove,
-    InlineKeyboardButton, InlineKeyboardMarkup
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes,
-    ConversationHandler, CallbackQueryHandler, filters
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 )
 
-(
-    TABLE, STRENGTH, AROMA, STOPS, BOWL, BOWL_MANUAL, DRAFT, TEA,
-    WAITING_ADD_DISH, WAITING_REMOVE_DISH, CONFIRM, EDIT_FIELD
-) = range(12)
+TOKEN = "8023832910:AAHIj59YF8NX9uo3L60G_Nc_uPTEbC3GiGg"
+TARGET_CHAT_ID = -1002702319368
+
+TABLE, AROMA, STRENGTH, BOWL, DRAFT, SAVE_TEMPLATE_LABEL, MANUAL_BOWL = range(7)
 
 STRENGTH_CHOICES = [
-    ["Легкий", "Легкий+", "Легкий-Средний"],
+    ["Легкий", "Легкий +", "Легкий-Средний"],
     ["Безопасный Дарк", "Средний"],
     ["Средний+", "Выше среднего", "Крепкий"]
 ]
-DRAFT_CHOICES = [["Union", "Yapona", "Wookah"]]
+DRAFT_CHOICES = ["Union", "Yapona", "Wookah"]
 BOWL_CHOICES = [
-    [InlineKeyboardButton("Хайп", callback_data="bowl_Хайп Т"),
-     InlineKeyboardButton("Япона Т", callback_data="bowl_Япона Т")],
-    [InlineKeyboardButton("Концептик", callback_data="bowl_Концептик"),
+    [InlineKeyboardButton("Прямоток", callback_data="bowl_Прямоток"),
      InlineKeyboardButton("Фанел", callback_data="bowl_Фанел")],
-    [InlineKeyboardButton("Элиан", callback_data="bowl_Элиан"),
-     InlineKeyboardButton("КС", callback_data="bowl_КС")],
-    [InlineKeyboardButton("Ввести вручную", callback_data="bowl_manual")],
-    [InlineKeyboardButton("⏭ Пропустить вопрос", callback_data="skip"),
-     InlineKeyboardButton("⚡ Быстрый заказ", callback_data="fast_order")]
+    [InlineKeyboardButton("Фольга", callback_data="bowl_Фольга"),
+     InlineKeyboardButton("Грейпфрут", callback_data="bowl_Грейпфрут")],
+    [InlineKeyboardButton("Гранат", callback_data="bowl_Гранат")],
+    [InlineKeyboardButton("Ввести вручную", callback_data="bowl_manual")]
 ]
-
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID", "0"))
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен. Укажи его в .env")
 
 TOPICS = {
     "1 Зона": 5,
@@ -48,468 +34,375 @@ TOPICS = {
     "general": None
 }
 
-STOPLIST_FILE = "stoplist.txt"
-
-MAIN_MENU_KEYBOARD = [
-    [InlineKeyboardButton("📝 Сделать заказ", callback_data="main_start")],
-    [InlineKeyboardButton("📋 Стоп-лист", callback_data="main_stoplist")]
-]
-
-def load_stop_dishes():
-    if not os.path.exists(STOPLIST_FILE):
-        return []
-    with open(STOPLIST_FILE, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
-
-def save_stop_dishes(stop_dishes):
-    with open(STOPLIST_FILE, "w", encoding="utf-8") as f:
-        for dish in stop_dishes:
-            f.write(dish + "\n")
-
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await update.message.reply_text(
-            "Главное меню:",
-            reply_markup=InlineKeyboardMarkup(MAIN_MENU_KEYBOARD)
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            "Главное меню:",
-            reply_markup=InlineKeyboardMarkup(MAIN_MENU_KEYBOARD)
-        )
-
-async def main_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "main_stoplist":
-        await stoplist(update, context)
-
-async def stoplist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stop_dishes = load_stop_dishes()
-    text = "Стоп-лист пуст." if not stop_dishes else \
-        "Стоп-лист:\n" + "\n".join(f"- {dish}" for dish in stop_dishes)
-    keyboard = [
-        [
-            InlineKeyboardButton("➕ Добавить блюдо", callback_data="add_dish"),
-            InlineKeyboardButton("➖ Удалить блюдо", callback_data="remove_dish"),
-        ],
-        [
-            InlineKeyboardButton("🏠 Главное меню", callback_data="to_menu")
-        ]
-    ]
-    if update.message:
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-async def stoplist_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "add_dish":
-        await query.message.reply_text("Введите название блюда для добавления в стоп-лист:")
-        return WAITING_ADD_DISH
-    elif query.data == "remove_dish":
-        await query.message.reply_text("Введите название блюда для удаления из стоп-листа:")
-        return WAITING_REMOVE_DISH
-    elif query.data == "to_menu":
-        await menu(update, context)
-        return ConversationHandler.END
-
-async def add_dish_wait(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dish = update.message.text.strip()
-    stop_dishes = load_stop_dishes()
-    user = update.effective_user
-    username = (
-        f"@{user.username}" if user.username else user.full_name or user.id
-    )
-    if dish.lower() in (d.lower() for d in stop_dishes):
-        await update.message.reply_text(f"Позиция «{dish}» уже в стоп-листе.")
-    else:
-        stop_dishes.append(dish)
-        save_stop_dishes(stop_dishes)
-        await update.message.reply_text(
-            f"Позиция «{dish}» добавлена в стоп-лист пользователем {username}."
-        )
-        await context.bot.send_message(
-            chat_id=TARGET_CHAT_ID,
-            text=f"➕ Позиция «{dish}» добавлена в стоп-лист пользователем {username}."
-        )
-    await stoplist(update, context)
-    return ConversationHandler.END
-
-async def remove_dish_wait(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dish = update.message.text.strip()
-    stop_dishes = load_stop_dishes()
-    user = update.effective_user
-    username = (
-        f"@{user.username}" if user.username else user.full_name or user.id
-    )
-    for d in stop_dishes:
-        if d.lower() == dish.lower():
-            stop_dishes.remove(d)
-            save_stop_dishes(stop_dishes)
-            await update.message.reply_text(
-                f"Позиция «{dish}» удалена из стоп-листа пользователем {username}."
-            )
-            await context.bot.send_message(
-                chat_id=TARGET_CHAT_ID,
-                text=f"➖ Позиция «{dish}» удалена из стоп-листа пользователем {username}."
-            )
-            break
-    else:
-        await update.message.reply_text(f"Позиция «{dish}» не найдена в стоп-листе.")
-    await stoplist(update, context)
-    return ConversationHandler.END
-
 def get_zone_and_topic_id(table_number: str):
     table_number = table_number.strip()
     try:
         num = int(table_number)
     except ValueError:
         num = None
-
     if (num is not None and 1 <= num <= 16) or table_number in ["101", "102", "103"]:
         return "1 Зона", TOPICS["1 Зона"]
     if (num is not None and 17 <= num <= 32) or table_number in ["104", "105"]:
         return "2 Зона", TOPICS["2 Зона"]
     if (num is not None and 33 <= num <= 47) or table_number in ["201", "777"]:
         return "2 Этаж", TOPICS["2 Этаж"]
-    return None, None
+    return "General", TOPICS["general"]
 
-def order_keyboard():
+def get_order_keyboard(context):
+    data = context.user_data
+    def val(key): return data.get(key, "❌ Не выбрано")
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⏭ Пропустить вопрос", callback_data="skip"),
-            InlineKeyboardButton("⚡ Быстрый заказ", callback_data="fast_order")
-        ]
+        [InlineKeyboardButton(f"Стол: {val('table')}", callback_data="edit_table")],
+        [InlineKeyboardButton(f"Ароматика: {val('aroma')}", callback_data="edit_aroma")],
+        [InlineKeyboardButton(f"Крепость: {val('strength')}", callback_data="edit_strength")],
+        [InlineKeyboardButton(f"Чаша: {val('bowl')}", callback_data="edit_bowl")],
+        [InlineKeyboardButton(f"Тяга: {val('draft')}", callback_data="edit_draft")],
+        [InlineKeyboardButton("✅ Отправить заказ", callback_data="send_order")]
     ])
 
-def strength_keyboard():
-    keyboard = [row for row in STRENGTH_CHOICES]
-    keyboard.append(["⏭ Пропустить вопрос", "⚡ Быстрый заказ"])
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
-def draft_keyboard():
-    keyboard = [row for row in DRAFT_CHOICES]
-    keyboard.append(["⏭ Пропустить вопрос", "⚡ Быстрый заказ"])
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
-def bowl_keyboard():
-    return InlineKeyboardMarkup(BOWL_CHOICES)
-
-# --- Логика заказа с кнопками и редактированием ---
-
-async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.effective_chat.send_message(
-        "Вопрос 1: Номер стола?",
-        reply_markup=order_keyboard()
-    )
-    return TABLE
-
-async def table(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        table_number = update.message.text
-        context.user_data['table'] = table_number
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['table'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return TABLE
-
-    zone, topic_id = get_zone_and_topic_id(context.user_data.get('table', ''))
-    context.user_data['zone'] = zone
-    context.user_data['topic_id'] = topic_id
-
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 2: Крепость?",
-            reply_markup=strength_keyboard()
-        )
-    else:
-        await update.callback_query.edit_message_text(
-            "Вопрос 2: Крепость?",
-            reply_markup=strength_keyboard()
-        )
-    return STRENGTH
-
-async def strength(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['strength'] = update.message.text
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['strength'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return STRENGTH
-
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 3: Ароматика?",
-            reply_markup=order_keyboard()
-        )
-    else:
-        await update.callback_query.edit_message_text(
-            "Вопрос 3: Ароматика?",
-            reply_markup=order_keyboard()
-        )
-    return AROMA
-
-async def aroma(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        user_choice = update.message.text.strip().lower()
-        stop_dishes = [dish.lower() for dish in load_stop_dishes()]
-        for stop_word in stop_dishes:
-            if stop_word and stop_word in user_choice:
-                await update.message.reply_text(
-                    f"Извините, позиция «{stop_word.capitalize()}» временно недоступна. Пожалуйста, выберите другую ароматику.",
-                    reply_markup=order_keyboard()
-                )
-                return AROMA
-        context.user_data['aroma'] = update.message.text
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['aroma'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return AROMA
-
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 4: Стопы?",
-            reply_markup=order_keyboard()
-        )
-    else:
-        await update.callback_query.edit_message_text(
-            "Вопрос 4: Стопы?",
-            reply_markup=order_keyboard()
-        )
-    return STOPS
-
-async def stops(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['stops'] = update.message.text
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['stops'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return STOPS
-
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 5: Какая чаша?",
-            reply_markup=bowl_keyboard()
-        )
-    else:
-        await update.callback_query.edit_message_text(
-            "Вопрос 5: Какая чаша?",
-            reply_markup=bowl_keyboard()
-        )
-    return BOWL
-
-async def bowl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['bowl'] = update.message.text
-        return await bowl_next(update, context)
-    elif update.callback_query:
-        data = update.callback_query.data
-        if data == "skip":
-            context.user_data['bowl'] = ""
-            return await bowl_next(update, context)
-        elif data == "fast_order":
-            return await finish_order(update, context)
-        elif data == "bowl_manual":
-            await update.callback_query.answer()
-            await update.callback_query.message.reply_text(
-                "Введите название чаши вручную:",
-                reply_markup=order_keyboard()
-            )
-            return BOWL_MANUAL
-        elif data.startswith("bowl_"):
-            context.user_data['bowl'] = data[5:]
-            return await bowl_next(update, context)
-    return BOWL
-
-async def bowl_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['bowl'] = update.message.text
-        return await bowl_next(update, context)
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['bowl'] = ""
-        return await bowl_next(update, context)
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    return BOWL_MANUAL
-
-async def bowl_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 6: Тяга?",
-            reply_markup=draft_keyboard()
-        )
-    elif update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.message.reply_text(
-            "Вопрос 6: Тяга?",
-            reply_markup=draft_keyboard()
-        )
-    return DRAFT
-
-async def draft(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['draft'] = update.message.text
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['draft'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return DRAFT
-
-    if update.message:
-        await update.message.reply_text(
-            "Вопрос 7: Китайский чай и количество персон?",
-            reply_markup=order_keyboard()
-        )
-    else:
-        await update.callback_query.edit_message_text(
-            "Вопрос 7: Китайский чай и количество персон?",
-            reply_markup=order_keyboard()
-        )
-    return TEA
-
-async def tea(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        context.user_data['tea'] = update.message.text
-    elif update.callback_query and update.callback_query.data == "skip":
-        context.user_data['tea'] = ""
-    elif update.callback_query and update.callback_query.data == "fast_order":
-        return await finish_order(update, context)
-    else:
-        return TEA
-
-    return await show_confirm(update, context)
-
-async def show_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    summary = (
-        f"Проверьте заказ:\n"
-        f"1️⃣ Номер стола: {context.user_data.get('table', '')}\n"
-        f"2️⃣ Крепость: {context.user_data.get('strength', '')}\n"
-        f"3️⃣ Ароматика: {context.user_data.get('aroma', '')}\n"
-        f"4️⃣ Стопы: {context.user_data.get('stops', '')}\n"
-        f"5️⃣ Чаша: {context.user_data.get('bowl', '')}\n"
-        f"6️⃣ Тяга: {context.user_data.get('draft', '')}\n"
-        f"7️⃣ Китайский чай и количество персон: {context.user_data.get('tea', '')}\n\n"
-        "Если хотите изменить какой-либо пункт, нажмите на соответствующую кнопку.\n"
-        "Если всё верно — подтвердите заказ."
-    )
+def get_table_input_keyboard(current_value: str):
     keyboard = [
-        [InlineKeyboardButton("1️⃣ Номер стола", callback_data="edit_table"),
-         InlineKeyboardButton("2️⃣ Крепость", callback_data="edit_strength")],
-        [InlineKeyboardButton("3️⃣ Ароматика", callback_data="edit_aroma"),
-         InlineKeyboardButton("4️⃣ Стопы", callback_data="edit_stops")],
-        [InlineKeyboardButton("5️⃣ Чаша", callback_data="edit_bowl"),
-         InlineKeyboardButton("6️⃣ Тяга", callback_data="edit_draft")],
-        [InlineKeyboardButton("7️⃣ Чай", callback_data="edit_tea")],
-        [InlineKeyboardButton("✅ Всё верно, отправить заказ", callback_data="confirm_order")]
+        [InlineKeyboardButton("1", callback_data="table_digit_1"),
+         InlineKeyboardButton("2", callback_data="table_digit_2"),
+         InlineKeyboardButton("3", callback_data="table_digit_3")],
+        [InlineKeyboardButton("4", callback_data="table_digit_4"),
+         InlineKeyboardButton("5", callback_data="table_digit_5"),
+         InlineKeyboardButton("6", callback_data="table_digit_6")],
+        [InlineKeyboardButton("7", callback_data="table_digit_7"),
+         InlineKeyboardButton("8", callback_data="table_digit_8"),
+         InlineKeyboardButton("9", callback_data="table_digit_9")],
+        [InlineKeyboardButton("0", callback_data="table_digit_0")],
+        [
+            InlineKeyboardButton("⬅️ Стереть", callback_data="table_digit_backspace"),
+            InlineKeyboardButton("✅ Готово", callback_data="table_digit_done")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📝 Сделать заказ", callback_data="main_order")],
+        [InlineKeyboardButton("⚡ Быстрый заказ", callback_data="quick_order_menu")]
     ]
     if update.message:
-        await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(keyboard))
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(summary, reply_markup=InlineKeyboardMarkup(keyboard))
-    return CONFIRM
-
-async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    await query.answer()
-    if data == "confirm_order":
-        return await finish_order(update, context)
-    elif data.startswith("edit_"):
-        field = data.replace("edit_", "")
-        context.user_data["edit_field"] = field
-        return await edit_field_start(update, context, field)
-    return CONFIRM
-
-async def edit_field_start(update: Update, context: ContextTypes.DEFAULT_TYPE, field: str):
-    prompts = {
-        "table": "Введите новый номер стола:",
-        "strength": "Выберите новую крепость:",
-        "aroma": "Введите новую ароматику:",
-        "stops": "Введите новые стопы:",
-        "bowl": "Выберите новую чашу:",
-        "draft": "Выберите новую тягу:",
-        "tea": "Введите новый китайский чай и количество персон:"
-    }
-    if field == "strength":
-        if update.callback_query:
-            await update.callback_query.edit_message_text(prompts[field], reply_markup=strength_keyboard())
-        else:
-            await update.message.reply_text(prompts[field], reply_markup=strength_keyboard())
-        return STRENGTH
-    elif field == "draft":
-        if update.callback_query:
-            await update.callback_query.edit_message_text(prompts[field], reply_markup=draft_keyboard())
-        else:
-            await update.message.reply_text(prompts[field], reply_markup=draft_keyboard())
-        return DRAFT
-    elif field == "bowl":
-        if update.callback_query:
-            await update.callback_query.edit_message_text(prompts[field], reply_markup=bowl_keyboard())
-        else:
-            await update.message.reply_text(prompts[field], reply_markup=bowl_keyboard())
-        return BOWL
+        msg = await update.message.reply_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data["order_msg_id"] = msg.message_id
     else:
-        if update.callback_query:
-            await update.callback_query.edit_message_text(prompts[field], reply_markup=order_keyboard())
-        else:
-            await update.message.reply_text(prompts[field], reply_markup=order_keyboard())
-        return {
-            "table": TABLE, "aroma": AROMA, "stops": STOPS, "tea": TEA
-        }[field]
+        msg = await update.callback_query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data["order_msg_id"] = msg.message_id
 
-async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    table = context.user_data.get('table', '')
-    zone = context.user_data.get('zone', '❓')
-    topic_id = context.user_data.get('topic_id')
-    order_time = int(time.time())
+async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order_msg_id = context.user_data.get("order_msg_id")
+    context.user_data.clear()
+    if order_msg_id:
+        context.user_data["order_msg_id"] = order_msg_id
+    await update.callback_query.answer()
+    msg = await update.callback_query.edit_message_text(
+        "Меню заказа. Нажмите на пункт для ввода/изменения:",
+        reply_markup=get_order_keyboard(context)
+    )
+    context.user_data["order_msg_id"] = msg.message_id
+
+async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    field = query.data.replace("edit_", "")
+    context.user_data["edit_field"] = field
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = query.message.chat_id
+
+    if field == "strength":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(text, callback_data=f"strength_{text}") for text in row]
+            for row in STRENGTH_CHOICES
+        ])
+        await context.bot.edit_message_text(
+            "Выберите крепость:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=keyboard
+        )
+        return STRENGTH
+    elif field == "bowl":
+        await context.bot.edit_message_text(
+            "Выберите чашу:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=InlineKeyboardMarkup(BOWL_CHOICES)
+        )
+        return BOWL
+    elif field == "draft":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(text, callback_data=f"draft_{text}")]
+            for text in DRAFT_CHOICES
+        ])
+        await context.bot.edit_message_text(
+            "Выберите тягу:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=keyboard
+        )
+        return DRAFT
+    elif field == "table":
+        context.user_data["table_input"] = ""
+        await context.bot.edit_message_text(
+            f"Введите номер стола:\n\n<b>{'' if '' else '—'}</b>",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_table_input_keyboard(""),
+            parse_mode="HTML"
+        )
+        return TABLE
+    else:
+        prompts = {
+            "aroma": "Введите ароматику:"
+        }
+        await context.bot.edit_message_text(
+            prompts[field],
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=None
+        )
+        return AROMA
+
+async def table_digit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = query.message.chat_id
+
+    value = context.user_data.get("table_input", "")
+
+    if data.startswith("table_digit_"):
+        action = data.replace("table_digit_", "")
+        if action.isdigit():
+            value += action
+        elif action == "backspace":
+            value = value[:-1]
+        elif action == "done":
+            if value:
+                context.user_data["table"] = value
+                context.user_data["edit_field"] = None
+                if context.user_data.get("from_quick"):
+                    context.user_data.pop("from_quick")
+                    await send_order(update, context, from_quick=True)
+                    # --- Сохраняем order_msg_id! ---
+                    order_msg_id = context.user_data.get("order_msg_id")
+                    context.user_data.clear()
+                    if order_msg_id:
+                        context.user_data["order_msg_id"] = order_msg_id
+                    await menu(update, context)
+                    return ConversationHandler.END
+                else:
+                    try:
+                        await context.bot.edit_message_text(
+                            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+                            chat_id=chat_id,
+                            message_id=order_msg_id,
+                            reply_markup=get_order_keyboard(context)
+                        )
+                    except Exception:
+                        pass
+                    return ConversationHandler.END
+            else:
+                try:
+                    await context.bot.edit_message_text(
+                        f"Введите номер стола:\n\n<b>{value if value else '—'}</b>\n\n❗ Введите хотя бы одну цифру.",
+                        chat_id=chat_id,
+                        message_id=order_msg_id,
+                        reply_markup=get_table_input_keyboard(value),
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+                return TABLE
+
+    context.user_data["table_input"] = value
+    try:
+        await context.bot.edit_message_text(
+            f"Введите номер стола:\n\n<b>{value if value else '—'}</b>",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_table_input_keyboard(value),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    return TABLE
+
+async def save_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    field = context.user_data.get("edit_field")
+    if field not in ["aroma", "bowl"]:
+        return
+    context.user_data[field] = update.message.text
+    context.user_data["edit_field"] = None
+
+    order_msg_id = context.user_data.get('order_msg_id')
+    chat_id = update.effective_chat.id
+
+    if context.user_data.get("from_quick"):
+        context.user_data.pop("from_quick")
+        await send_order(update, context, from_quick=True)
+        # --- Сохраняем order_msg_id! ---
+        order_msg_id = context.user_data.get("order_msg_id")
+        context.user_data.clear()
+        if order_msg_id:
+            context.user_data["order_msg_id"] = order_msg_id
+        await menu(update, context)
+        return ConversationHandler.END
+
+    try:
+        await context.bot.edit_message_text(
+            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_order_keyboard(context)
+        )
+    except Exception:
+        pass
+    return ConversationHandler.END
+
+async def save_strength_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = query.data.replace("strength_", "")
+    context.user_data["strength"] = text
+    context.user_data["edit_field"] = None
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = query.message.chat_id
+    try:
+        await context.bot.edit_message_text(
+            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_order_keyboard(context)
+        )
+    except Exception:
+        pass
+    return ConversationHandler.END
+
+async def save_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = query.data.replace("draft_", "")
+    context.user_data["draft"] = text
+    context.user_data["edit_field"] = None
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = query.message.chat_id
+    try:
+        await context.bot.edit_message_text(
+            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_order_keyboard(context)
+        )
+    except Exception:
+        pass
+    return ConversationHandler.END
+
+async def bowl_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = query.message.chat_id
+    if data == "bowl_manual":
+        context.user_data["edit_field"] = "bowl"
+        try:
+            await context.bot.edit_message_text(
+                "Введите название чаши вручную:",
+                chat_id=chat_id,
+                message_id=order_msg_id,
+                reply_markup=None
+            )
+        except Exception:
+            pass
+        return MANUAL_BOWL
+    elif data.startswith("bowl_"):
+        context.user_data["bowl"] = data[5:]
+        context.user_data["edit_field"] = None
+        try:
+            await context.bot.edit_message_text(
+                "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+                chat_id=chat_id,
+                message_id=order_msg_id,
+                reply_markup=get_order_keyboard(context)
+            )
+        except Exception:
+            pass
+        return ConversationHandler.END
+
+async def save_manual_bowl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bowl"] = update.message.text
+    context.user_data["edit_field"] = None
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.edit_message_text(
+            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=get_order_keyboard(context)
+        )
+    except Exception:
+        pass
+    return ConversationHandler.END
+
+async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_quick=False):
+    data = context.user_data
+    table = data.get('table', '')
+    zone, topic_id = get_zone_and_topic_id(table)
     user_id = update.effective_user.id
+    order_time = int(time.time())
 
-    # Сохраняем всю информацию о заказе для дальнейшего использования
+    summary = (
+        f"Новый заказ от пользователя @{update.effective_user.username or update.effective_user.id}:\n"
+        f"Зона: {zone}\n"
+        f"Стол: {table}\n"
+        f"Ароматика: {data.get('aroma', '❌ Не выбрано')}\n"
+        f"Крепость: {data.get('strength', '❌ Не выбрано')}\n"
+        f"Чаша: {data.get('bowl', '❌ Не выбрано')}\n"
+        f"Тяга: {data.get('draft', '❌ Не выбрано')}\n"
+    )
+    ready_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ КАЛЬЯН ГОТОВ", callback_data=f"order_ready|{order_time}")]
+    ])
+
     context.bot_data.setdefault("orders", {})[order_time] = {
         "user_id": user_id,
         "table": table
     }
 
-    summary = (
-        f"Новый заказ от пользователя @{update.effective_user.username or update.effective_user.id}:\n"
-        f"Зона: {zone}\n"
-        f"Номер стола: {context.user_data.get('table', '')}\n"
-        f"Крепость: {context.user_data.get('strength', '')}\n"
-        f"Ароматика: {context.user_data.get('aroma', '')}\n"
-        f"Стопы: {context.user_data.get('stops', '')}\n"
-        f"Чаша: {context.user_data.get('bowl', '')}\n"
-        f"Тяга: {context.user_data.get('draft', '')}\n"
-        f"Китайский чай и количество персон: {context.user_data.get('tea', '')}"
-    )
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if not from_quick:
+        try:
+            if order_msg_id and chat_id:
+                await context.bot.edit_message_text(
+                    "Спасибо! Ваш заказ отправлен.",
+                    chat_id=chat_id,
+                    message_id=order_msg_id,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💾 Сохранить как шаблон", callback_data="save_as_template")],
+                        [InlineKeyboardButton("📝 Сделать заказ", callback_data="main_order")],
+                        [InlineKeyboardButton("⚡ Быстрый заказ", callback_data="quick_order_menu")]
+                    ])
+                )
+            elif hasattr(update, "callback_query") and update.callback_query:
+                await update.callback_query.edit_message_text(
+                    "Спасибо! Ваш заказ отправлен.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💾 Сохранить как шаблон", callback_data="save_as_template")],
+                        [InlineKeyboardButton("📝 Сделать заказ", callback_data="main_order")],
+                        [InlineKeyboardButton("⚡ Быстрый заказ", callback_data="quick_order_menu")]
+                    ])
+                )
+        except Exception:
+            pass
+    # В режиме from_quick не делаем edit_message_text!
 
-    if update.message:
-        await update.message.reply_text("Спасибо! Ваш заказ принят.", reply_markup=ReplyKeyboardRemove())
-    elif update.callback_query:
-        await update.callback_query.edit_message_text("Спасибо! Ваш заказ принят.")
-
-    ready_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ КАЛЬЯН ГОТОВ", callback_data=f"order_ready|{order_time}")]
-    ])
-
-    if topic_id:
+    if topic_id is not None:
         await context.bot.send_message(
             chat_id=TARGET_CHAT_ID,
             text=summary,
@@ -523,17 +416,12 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ready_keyboard
         )
 
-    if zone in ["1 Зона", "2 Зона"]:
-        general_topic_id = TOPICS["general"]
-        await context.bot.send_message(
-            chat_id=TARGET_CHAT_ID,
-            text=summary,
-            message_thread_id=general_topic_id,
-            reply_markup=ready_keyboard
-        )
-
+async def to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order_msg_id = context.user_data.get("order_msg_id")
+    context.user_data.clear()
+    if order_msg_id:
+        context.user_data["order_msg_id"] = order_msg_id
     await menu(update, context)
-    return ConversationHandler.END
 
 async def order_ready_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -555,7 +443,6 @@ async def order_ready_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await query.edit_message_text(text)
 
-        # Получаем user_id и номер стола из bot_data
         order_info = context.bot_data.get("orders", {}).get(order_time)
         if order_info:
             user_id = order_info.get("user_id")
@@ -568,75 +455,181 @@ async def order_ready_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 print(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Действие отменено.", reply_markup=ReplyKeyboardRemove())
+# ----------- Быстрые заказы (шаблоны) -----------
+
+async def quick_order_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    quick_orders = context.bot_data.get("quick_orders", [])
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.effective_chat.id if update.effective_chat else update.callback_query.message.chat_id
+
+    if not quick_orders:
+        try:
+            await context.bot.edit_message_text(
+                "Нет сохранённых быстрых заказов.",
+                chat_id=chat_id,
+                message_id=order_msg_id,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 В меню", callback_data="to_menu")]
+                ])
+            )
+        except Exception:
+            pass
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(tpl["label"], callback_data=f"quick_order_apply_{i}")]
+        for i, tpl in enumerate(quick_orders)
+    ]
+    keyboard.append([InlineKeyboardButton("🔙 В меню", callback_data="to_menu")])
+    try:
+        await context.bot.edit_message_text(
+            "Выберите шаблон для быстрого заказа:",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        pass
+
+async def quick_order_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    idx = int(update.callback_query.data.replace("quick_order_apply_", ""))
+    templates = context.bot_data.get("quick_orders", [])
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.callback_query.message.chat_id
+
+    if idx >= len(templates):
+        try:
+            await context.bot.edit_message_text(
+                "Шаблон не найден.",
+                chat_id=chat_id,
+                message_id=order_msg_id,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 В меню", callback_data="to_menu")]
+                ])
+            )
+        except Exception:
+            pass
+        return ConversationHandler.END
+
+    tpl = templates[idx]
+    # --- ВАЖНО: сохраняем order_msg_id перед очисткой! ---
+    context.user_data.clear()
+    if order_msg_id:
+        context.user_data["order_msg_id"] = order_msg_id
+    # -----------------------------------------
+    for key, value in tpl["order"].items():
+        if key != "table":
+            context.user_data[key] = value
+
+    if not context.user_data.get("table"):
+        context.user_data["edit_field"] = "table"
+        context.user_data["from_quick"] = True
+        context.user_data["table_input"] = ""
+        try:
+            await context.bot.edit_message_text(
+                f"Введите номер стола:\n\n<b>{context.user_data['table_input'] if context.user_data['table_input'] else '—'}</b>",
+                chat_id=chat_id,
+                message_id=order_msg_id,
+                reply_markup=get_table_input_keyboard(context.user_data["table_input"]),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return TABLE
+    else:
+        await send_order(update, context, from_quick=True)
+        context.user_data.clear()
+        if order_msg_id:
+            context.user_data["order_msg_id"] = order_msg_id
+        await menu(update, context)
+        return ConversationHandler.END
+
+async def save_as_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.callback_query.message.chat_id
+    try:
+        await context.bot.edit_message_text(
+            "Введите подпись для шаблона (например, ФИО гостя):",
+            chat_id=chat_id,
+            message_id=order_msg_id,
+            reply_markup=None
+        )
+    except Exception:
+        pass
+    return SAVE_TEMPLATE_LABEL
+
+async def save_template_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    label = update.message.text
+    order = {
+        "aroma": context.user_data.get("aroma"),
+        "strength": context.user_data.get("strength"),
+        "bowl": context.user_data.get("bowl"),
+        "draft": context.user_data.get("draft")
+    }
+    tpl = {"label": label, "order": order}
+
+    quick_orders = context.bot_data.setdefault("quick_orders", [])
+    quick_orders.append(tpl)
+
+    order_msg_id = context.user_data.get("order_msg_id")
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.edit_message_text(
+            f"Шаблон '{label}' сохранён!",
+            chat_id=chat_id,
+            message_id=order_msg_id
+        )
+    except Exception:
+        pass
+    # --- Сохраняем order_msg_id! ---
+    order_msg_id = context.user_data.get("order_msg_id")
+    context.user_data.clear()
+    if order_msg_id:
+        context.user_data["order_msg_id"] = order_msg_id
+    await menu(update, context)
     return ConversationHandler.END
 
 def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler(['menu', 'start'], menu))
-    app.add_handler(CallbackQueryHandler(main_menu_button, pattern=r"^main_stoplist$"))
+    app.add_handler(CallbackQueryHandler(start_order, pattern="^main_order$"))
+    app.add_handler(CallbackQueryHandler(send_order, pattern="^send_order$"))
     app.add_handler(CallbackQueryHandler(order_ready_callback, pattern=r"^order_ready\|"))
+    app.add_handler(CallbackQueryHandler(to_menu_callback, pattern="^to_menu$"))
 
-    stoplist_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(stoplist_button, pattern=r"^(add_dish|remove_dish|to_menu)$")
-        ],
-        states={
-            WAITING_ADD_DISH: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_dish_wait)],
-            WAITING_REMOVE_DISH: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_dish_wait)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-        allow_reentry=True
-    )
-    app.add_handler(stoplist_conv)
+    # Быстрые заказы
+    app.add_handler(CallbackQueryHandler(quick_order_menu, pattern="^quick_order_menu$"))
 
     order_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_order, pattern=r"^main_start$")],
+        entry_points=[
+            CallbackQueryHandler(edit_field, pattern=r"^edit_"),
+            CallbackQueryHandler(bowl_choice, pattern=r"^bowl_.*|bowl_manual$"),
+            CallbackQueryHandler(save_as_template, pattern="^save_as_template$"),
+            CallbackQueryHandler(quick_order_apply, pattern="^quick_order_apply_"),
+            CallbackQueryHandler(save_strength_callback, pattern=r"^strength_"),
+            CallbackQueryHandler(save_draft_callback, pattern=r"^draft_"),
+            CallbackQueryHandler(table_digit_callback, pattern="^table_digit_"),
+        ],
         states={
-            TABLE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, table),
-                CallbackQueryHandler(table, pattern=r"^(skip|fast_order)$")
-            ],
-            STRENGTH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, strength),
-                CallbackQueryHandler(strength, pattern=r"^(skip|fast_order)$")
-            ],
-            AROMA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, aroma),
-                CallbackQueryHandler(aroma, pattern=r"^(skip|fast_order)$")
-            ],
-            STOPS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, stops),
-                CallbackQueryHandler(stops, pattern=r"^(skip|fast_order)$")
-            ],
+            TABLE: [CallbackQueryHandler(table_digit_callback, pattern="^table_digit_")],
+            AROMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_field)],
+            STRENGTH: [CallbackQueryHandler(save_strength_callback, pattern=r"^strength_")],
             BOWL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bowl),
-                CallbackQueryHandler(bowl)  # <-- pattern убран!
+                CallbackQueryHandler(bowl_choice, pattern=r"^bowl_.*|bowl_manual$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_manual_bowl)
             ],
-            BOWL_MANUAL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bowl_manual),
-                CallbackQueryHandler(bowl_manual, pattern=r"^(skip|fast_order)$")
-            ],
-            DRAFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, draft),
-                CallbackQueryHandler(draft, pattern=r"^(skip|fast_order)$")
-            ],
-            TEA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, tea),
-                CallbackQueryHandler(tea, pattern=r"^(skip|fast_order)$")
-            ],
-            CONFIRM: [
-                CallbackQueryHandler(confirm_callback)
-            ]
+            DRAFT: [CallbackQueryHandler(save_draft_callback, pattern=r"^draft_")],
+            MANUAL_BOWL: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manual_bowl)],
+            SAVE_TEMPLATE_LABEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_template_label)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', menu)],
         allow_reentry=True
     )
     app.add_handler(order_conv)
 
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
