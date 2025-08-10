@@ -1,4 +1,6 @@
 
+import os
+from dotenv import load_dotenv
 import time
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,8 +9,10 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 )
 
-TOKEN = "8023832910:AAHIj59YF8NX9uo3L60G_Nc_uPTEbC3GiGg"
-TARGET_CHAT_ID = -1002702319368
+load_dotenv()
+
+TOKEN = os.getenv("BOT_TOKEN")
+TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 
 TABLE, AROMA, STRENGTH, BOWL, DRAFT, SAVE_TEMPLATE_LABEL, MANUAL_BOWL = range(7)
 
