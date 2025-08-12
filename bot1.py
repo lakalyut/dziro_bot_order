@@ -17,7 +17,7 @@ TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 TABLE, AROMA, STRENGTH, BOWL, DRAFT, SAVE_TEMPLATE_LABEL, MANUAL_BOWL = range(7)
 
 STRENGTH_CHOICES = [
-    ["Легкий", "Легкий +", "Легкий-Средний"],
+    ["Легкий", "Легкий+", "Легкий-Средний"],
     ["Безопасный Дарк", "Средний"],
     ["Средний+", "Выше среднего", "Крепкий"]
 ]
