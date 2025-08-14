@@ -1,7 +1,7 @@
 
-import os
-from dotenv import load_dotenv
-import time
+import asyncio
+from time import time
+import aiosqlite
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
@@ -13,6 +13,8 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
+
+DB_FILE = "templates.db"
 
 TABLE, AROMA, STRENGTH, BOWL, DRAFT, SAVE_TEMPLATE_LABEL, MANUAL_BOWL = range(7)
 
@@ -32,11 +34,51 @@ BOWL_CHOICES = [
 ]
 
 TOPICS = {
-    "1 Зона": 5,
-    "2 Зона": 2,
-    "2 Этаж": 6,
+    "1 Зона": 2,
+    "2 Зона": 3,
+    "2 Этаж": 5,
     "general": None
 }
+
+# --- DATABASE FUNCTIONS ---
+
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                aroma TEXT,
+                strength TEXT,
+                bowl TEXT,
+                draft TEXT
+            )
+        """)
+        await db.commit()
+
+async def save_template(label, aroma, strength, bowl, draft):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO templates (label, aroma, strength, bowl, draft) VALUES (?, ?, ?, ?, ?)",
+            (label, aroma, strength, bowl, draft)
+        )
+        await db.commit()
+
+async def get_templates():
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT id, label, aroma, strength, bowl, draft FROM templates") as cursor:
+            rows = await cursor.fetchall()
+            return rows
+
+async def get_template_by_id(template_id):
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute(
+            "SELECT id, label, aroma, strength, bowl, draft FROM templates WHERE id = ?",
+            (template_id,)
+        ) as cursor:
+            return await cursor.fetchone()
+
+# --- BUSINESS LOGIC ---
 
 def get_zone_and_topic_id(table_number: str):
     table_number = table_number.strip()
@@ -191,7 +233,6 @@ async def table_digit_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 if context.user_data.get("from_quick"):
                     context.user_data.pop("from_quick")
                     await send_order(update, context, from_quick=True)
-                    # --- Сохраняем order_msg_id! ---
                     order_msg_id = context.user_data.get("order_msg_id")
                     context.user_data.clear()
                     if order_msg_id:
@@ -242,13 +283,18 @@ async def save_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data[field] = update.message.text
     context.user_data["edit_field"] = None
 
+    # Удалить сообщение пользователя
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     order_msg_id = context.user_data.get('order_msg_id')
     chat_id = update.effective_chat.id
 
     if context.user_data.get("from_quick"):
         context.user_data.pop("from_quick")
         await send_order(update, context, from_quick=True)
-        # --- Сохраняем order_msg_id! ---
         order_msg_id = context.user_data.get("order_msg_id")
         context.user_data.clear()
         if order_msg_id:
@@ -340,6 +386,13 @@ async def bowl_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_manual_bowl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bowl"] = update.message.text
     context.user_data["edit_field"] = None
+
+    # Удалить сообщение пользователя
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     order_msg_id = context.user_data.get("order_msg_id")
     chat_id = update.effective_chat.id
     try:
@@ -358,7 +411,6 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
     table = data.get('table', '')
     zone, topic_id = get_zone_and_topic_id(table)
     user_id = update.effective_user.id
-    order_time = int(time.time())
 
     summary = (
         f"Новый заказ от пользователя @{update.effective_user.username or update.effective_user.id}:\n"
@@ -369,14 +421,6 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
         f"Чаша: {data.get('bowl', '❌ Не выбрано')}\n"
         f"Тяга: {data.get('draft', '❌ Не выбрано')}\n"
     )
-    ready_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ КАЛЬЯН ГОТОВ", callback_data=f"order_ready|{order_time}")]
-    ])
-
-    context.bot_data.setdefault("orders", {})[order_time] = {
-        "user_id": user_id,
-        "table": table
-    }
 
     order_msg_id = context.user_data.get("order_msg_id")
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -404,7 +448,10 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
                 )
         except Exception:
             pass
-    # В режиме from_quick не делаем edit_message_text!
+
+    ready_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Кальян Отдан", callback_data=f"order_given|{int(time())}")]
+    ])
 
     if topic_id is not None:
         await context.bot.send_message(
@@ -420,18 +467,11 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
             reply_markup=ready_keyboard
         )
 
-async def to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    order_msg_id = context.user_data.get("order_msg_id")
-    context.user_data.clear()
-    if order_msg_id:
-        context.user_data["order_msg_id"] = order_msg_id
-    await menu(update, context)
-
-async def order_ready_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def order_given_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    if data.startswith("order_ready|"):
+    if data.startswith("order_given|"):
         order_time_str = data.split("|")[1]
         try:
             order_time = int(order_time_str)
@@ -439,34 +479,33 @@ async def order_ready_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text("Ошибка: не удалось определить время заказа.")
             return
 
-        now = int(time.time())
+        now = int(time())
         elapsed = now - order_time
         mins, secs = divmod(elapsed, 60)
         time_str = f"{mins} мин {secs} сек" if mins else f"{secs} сек"
-        text = query.message.text + f"\n\n✅ КАЛЬЯН ГОТОВ!\n⏱ Время ожидания: {time_str}"
+
+        text = query.message.text + f"\n\n✅ Кальян отдан!\n⏱ Время ожидания: {time_str}"
 
         await query.edit_message_text(text)
 
-        order_info = context.bot_data.get("orders", {}).get(order_time)
-        if order_info:
-            user_id = order_info.get("user_id")
-            table = order_info.get("table", "неизвестен")
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"КАЛЬЯН ГОТОВ! ПОРА ОТДАВАТЬ ЗА СТОЛ №{table}."
-                )
-            except Exception as e:
-                print(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+async def send_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_order(update, context, from_quick=False)
+
+async def to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order_msg_id = context.user_data.get("order_msg_id")
+    context.user_data.clear()
+    if order_msg_id:
+        context.user_data["order_msg_id"] = order_msg_id
+    await menu(update, context)
 
 # ----------- Быстрые заказы (шаблоны) -----------
 
 async def quick_order_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    quick_orders = context.bot_data.get("quick_orders", [])
+    templates = await get_templates()
     order_msg_id = context.user_data.get("order_msg_id")
     chat_id = update.effective_chat.id if update.effective_chat else update.callback_query.message.chat_id
 
-    if not quick_orders:
+    if not templates:
         try:
             await context.bot.edit_message_text(
                 "Нет сохранённых быстрых заказов.",
@@ -481,8 +520,8 @@ async def quick_order_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton(tpl["label"], callback_data=f"quick_order_apply_{i}")]
-        for i, tpl in enumerate(quick_orders)
+        [InlineKeyboardButton(label, callback_data=f"quick_order_apply_{tpl_id}")]
+        for tpl_id, label, *_ in templates
     ]
     keyboard.append([InlineKeyboardButton("🔙 В меню", callback_data="to_menu")])
     try:
@@ -496,12 +535,12 @@ async def quick_order_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def quick_order_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    idx = int(update.callback_query.data.replace("quick_order_apply_", ""))
-    templates = context.bot_data.get("quick_orders", [])
+    tpl_id = int(update.callback_query.data.replace("quick_order_apply_", ""))
+    tpl = await get_template_by_id(tpl_id)
     order_msg_id = context.user_data.get("order_msg_id")
     chat_id = update.callback_query.message.chat_id
 
-    if idx >= len(templates):
+    if not tpl:
         try:
             await context.bot.edit_message_text(
                 "Шаблон не найден.",
@@ -515,15 +554,15 @@ async def quick_order_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return ConversationHandler.END
 
-    tpl = templates[idx]
-    # --- ВАЖНО: сохраняем order_msg_id перед очисткой! ---
+    _, label, aroma, strength, bowl, draft = tpl
     context.user_data.clear()
     if order_msg_id:
         context.user_data["order_msg_id"] = order_msg_id
-    # -----------------------------------------
-    for key, value in tpl["order"].items():
-        if key != "table":
-            context.user_data[key] = value
+
+    context.user_data["aroma"] = aroma
+    context.user_data["strength"] = strength
+    context.user_data["bowl"] = bowl
+    context.user_data["draft"] = draft
 
     if not context.user_data.get("table"):
         context.user_data["edit_field"] = "table"
@@ -565,16 +604,17 @@ async def save_as_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_template_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = update.message.text
-    order = {
-        "aroma": context.user_data.get("aroma"),
-        "strength": context.user_data.get("strength"),
-        "bowl": context.user_data.get("bowl"),
-        "draft": context.user_data.get("draft")
-    }
-    tpl = {"label": label, "order": order}
+    aroma = context.user_data.get("aroma")
+    strength = context.user_data.get("strength")
+    bowl = context.user_data.get("bowl")
+    draft = context.user_data.get("draft")
+    await save_template(label, aroma, strength, bowl, draft)
 
-    quick_orders = context.bot_data.setdefault("quick_orders", [])
-    quick_orders.append(tpl)
+    # Удалить сообщение пользователя
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
     order_msg_id = context.user_data.get("order_msg_id")
     chat_id = update.effective_chat.id
@@ -586,7 +626,6 @@ async def save_template_label(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     except Exception:
         pass
-    # --- Сохраняем order_msg_id! ---
     order_msg_id = context.user_data.get("order_msg_id")
     context.user_data.clear()
     if order_msg_id:
@@ -594,14 +633,19 @@ async def save_template_label(update: Update, context: ContextTypes.DEFAULT_TYPE
     await menu(update, context)
     return ConversationHandler.END
 
+# --- ASYNC INIT FOR TELEGRAM PTB ---
+
+async def post_init(application: Application):
+    await init_db()
+
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler(['menu', 'start'], menu))
     app.add_handler(CallbackQueryHandler(start_order, pattern="^main_order$"))
-    app.add_handler(CallbackQueryHandler(send_order, pattern="^send_order$"))
-    app.add_handler(CallbackQueryHandler(order_ready_callback, pattern=r"^order_ready\|"))
+    app.add_handler(CallbackQueryHandler(send_order_callback, pattern="^send_order$"))
     app.add_handler(CallbackQueryHandler(to_menu_callback, pattern="^to_menu$"))
+    app.add_handler(CallbackQueryHandler(order_given_callback, pattern=r"^order_given\|"))
 
     # Быстрые заказы
     app.add_handler(CallbackQueryHandler(quick_order_menu, pattern="^quick_order_menu$"))
@@ -637,3 +681,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
