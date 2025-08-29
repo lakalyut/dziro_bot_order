@@ -1,11 +1,12 @@
 
 import os
 import asyncio
-from time import time
 import aiosqlite
+from time import time
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 )
@@ -25,13 +26,13 @@ STRENGTH_CHOICES = [
     ["Безопасный Дарк", "Средний"],
     ["Средний+", "Выше среднего", "Крепкий"]
 ]
-DRAFT_CHOICES = ["Union", "Yapona", "Wookah"]
+DRAFT_CHOICES = ["Union 🔴", "Yapona ⚫", "Wookah 🟤"]
 BOWL_CHOICES = [
     [InlineKeyboardButton("Прямоток", callback_data="bowl_Прямоток"),
      InlineKeyboardButton("Фанел", callback_data="bowl_Фанел")],
     [InlineKeyboardButton("Фольга", callback_data="bowl_Фольга"),
-     InlineKeyboardButton("Грейпфрут", callback_data="bowl_Грейпфрут")],
-    [InlineKeyboardButton("Гранат", callback_data="bowl_Гранат")],
+     InlineKeyboardButton("Грейпфрут 🍊", callback_data="bowl_Грейпфрут 🍊")],
+    [InlineKeyboardButton("Гранат 🍎", callback_data="bowl_Гранат 🍎")],
     [InlineKeyboardButton("Ввести вручную", callback_data="bowl_manual")]
 ]
 
@@ -108,25 +109,6 @@ def get_order_keyboard(context):
         [InlineKeyboardButton("✅ Отправить заказ", callback_data="send_order")]
     ])
 
-def get_table_input_keyboard(current_value: str):
-    keyboard = [
-        [InlineKeyboardButton("1", callback_data="table_digit_1"),
-         InlineKeyboardButton("2", callback_data="table_digit_2"),
-         InlineKeyboardButton("3", callback_data="table_digit_3")],
-        [InlineKeyboardButton("4", callback_data="table_digit_4"),
-         InlineKeyboardButton("5", callback_data="table_digit_5"),
-         InlineKeyboardButton("6", callback_data="table_digit_6")],
-        [InlineKeyboardButton("7", callback_data="table_digit_7"),
-         InlineKeyboardButton("8", callback_data="table_digit_8"),
-         InlineKeyboardButton("9", callback_data="table_digit_9")],
-        [InlineKeyboardButton("0", callback_data="table_digit_0")],
-        [
-            InlineKeyboardButton("⬅️ Стереть", callback_data="table_digit_backspace"),
-            InlineKeyboardButton("✅ Готово", callback_data="table_digit_done")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📝 Сделать заказ", callback_data="main_order")],
@@ -192,13 +174,11 @@ async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return DRAFT
     elif field == "table":
-        context.user_data["table_input"] = ""
         await context.bot.edit_message_text(
-            f"Введите номер стола:\n\n<b>{'' if '' else '—'}</b>",
+            "Введите номер стола:",
             chat_id=chat_id,
             message_id=order_msg_id,
-            reply_markup=get_table_input_keyboard(""),
-            parse_mode="HTML"
+            reply_markup=None
         )
         return TABLE
     else:
@@ -213,70 +193,39 @@ async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return AROMA
 
-async def table_digit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    order_msg_id = context.user_data.get("order_msg_id")
-    chat_id = query.message.chat_id
+async def save_table_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["table"] = update.message.text.strip()
+    context.user_data["edit_field"] = None
 
-    value = context.user_data.get("table_input", "")
+    # Удалить сообщение пользователя
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
-    if data.startswith("table_digit_"):
-        action = data.replace("table_digit_", "")
-        if action.isdigit():
-            value += action
-        elif action == "backspace":
-            value = value[:-1]
-        elif action == "done":
-            if value:
-                context.user_data["table"] = value
-                context.user_data["edit_field"] = None
-                if context.user_data.get("from_quick"):
-                    context.user_data.pop("from_quick")
-                    await send_order(update, context, from_quick=True)
-                    order_msg_id = context.user_data.get("order_msg_id")
-                    context.user_data.clear()
-                    if order_msg_id:
-                        context.user_data["order_msg_id"] = order_msg_id
-                    await menu(update, context)
-                    return ConversationHandler.END
-                else:
-                    try:
-                        await context.bot.edit_message_text(
-                            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
-                            chat_id=chat_id,
-                            message_id=order_msg_id,
-                            reply_markup=get_order_keyboard(context)
-                        )
-                    except Exception:
-                        pass
-                    return ConversationHandler.END
-            else:
-                try:
-                    await context.bot.edit_message_text(
-                        f"Введите номер стола:\n\n<b>{value if value else '—'}</b>\n\n❗ Введите хотя бы одну цифру.",
-                        chat_id=chat_id,
-                        message_id=order_msg_id,
-                        reply_markup=get_table_input_keyboard(value),
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-                return TABLE
+    order_msg_id = context.user_data.get('order_msg_id')
+    chat_id = update.effective_chat.id
 
-    context.user_data["table_input"] = value
+    if context.user_data.get("from_quick"):
+        context.user_data.pop("from_quick")
+        await send_order(update, context, from_quick=True)
+        order_msg_id = context.user_data.get("order_msg_id")
+        context.user_data.clear()
+        if order_msg_id:
+            context.user_data["order_msg_id"] = order_msg_id
+        await menu(update, context)
+        return ConversationHandler.END
+
     try:
         await context.bot.edit_message_text(
-            f"Введите номер стола:\n\n<b>{value if value else '—'}</b>",
+            "Сохранено!\n\nМеню заказа. Нажмите на пункт для ввода/изменения:",
             chat_id=chat_id,
             message_id=order_msg_id,
-            reply_markup=get_table_input_keyboard(value),
-            parse_mode="HTML"
+            reply_markup=get_order_keyboard(context)
         )
     except Exception:
         pass
-    return TABLE
+    return ConversationHandler.END
 
 async def save_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     field = context.user_data.get("edit_field")
@@ -408,11 +357,48 @@ async def save_manual_bowl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return ConversationHandler.END
 
+# ----------- Кнопка "Кальян отдан" -----------
+
+def format_elapsed(ts):
+    now = int(time())
+    delta = now - ts
+    mins, secs = divmod(delta, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f"{hours}ч {mins}м {secs}с"
+    elif mins:
+        return f"{mins}м {secs}с"
+    else:
+        return f"{secs}с"
+
+async def order_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # order_done_{user_id}_{timestamp}
+    parts = data.split("_")
+    if len(parts) != 4:
+        return
+
+    ts = int(parts[3])
+    elapsed = format_elapsed(ts)
+
+    await query.edit_message_reply_markup(
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Кальян отдан ({elapsed} назад)", callback_data="noop")]
+        ])
+    )
+
+async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+
+# ----------- Отправка заказа -----------
+
 async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_quick=False):
     data = context.user_data
     table = data.get('table', '')
     zone, topic_id = get_zone_and_topic_id(table)
     user_id = update.effective_user.id
+    ts = int(time())
 
     summary = (
         f"Новый заказ от пользователя @{update.effective_user.username or update.effective_user.id}:\n"
@@ -452,16 +438,23 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
             pass
 
     # Отправляем заказ в основной топик (если есть)
+    order_buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Кальян отдан", callback_data=f"order_done_{user_id}_{ts}")]
+    ])
     if topic_id is not None:
         await context.bot.send_message(
             chat_id=TARGET_CHAT_ID,
             text=summary,
-            message_thread_id=topic_id
+            message_thread_id=topic_id,
+            reply_markup=order_buttons,
+            parse_mode=ParseMode.HTML
         )
     else:
         await context.bot.send_message(
             chat_id=TARGET_CHAT_ID,
-            text=f"(Не определена тема для стола {table})\n" + summary
+            text=f"(Не определена тема для стола {table})\n" + summary,
+            reply_markup=order_buttons,
+            parse_mode=ParseMode.HTML
         )
 
     # Дублируем заказ в general, если это не он и если general определён
@@ -470,7 +463,9 @@ async def send_order(update: Update, context: ContextTypes.DEFAULT_TYPE, from_qu
         await context.bot.send_message(
             chat_id=TARGET_CHAT_ID,
             text=summary,
-            message_thread_id=general_topic_id
+            message_thread_id=general_topic_id,
+            reply_markup=order_buttons,
+            parse_mode=ParseMode.HTML
         )
 
 async def send_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -552,14 +547,12 @@ async def quick_order_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("table"):
         context.user_data["edit_field"] = "table"
         context.user_data["from_quick"] = True
-        context.user_data["table_input"] = ""
         try:
             await context.bot.edit_message_text(
-                f"Введите номер стола:\n\n<b>{context.user_data['table_input'] if context.user_data['table_input'] else '—'}</b>",
+                "Введите номер стола:",
                 chat_id=chat_id,
                 message_id=order_msg_id,
-                reply_markup=get_table_input_keyboard(context.user_data["table_input"]),
-                parse_mode="HTML"
+                reply_markup=None
             )
         except Exception:
             pass
@@ -630,6 +623,8 @@ def main():
     app.add_handler(CallbackQueryHandler(start_order, pattern="^main_order$"))
     app.add_handler(CallbackQueryHandler(send_order_callback, pattern="^send_order$"))
     app.add_handler(CallbackQueryHandler(to_menu_callback, pattern="^to_menu$"))
+    app.add_handler(CallbackQueryHandler(order_done_callback, pattern=r"^order_done_"))
+    app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
 
     # Быстрые заказы
     app.add_handler(CallbackQueryHandler(quick_order_menu, pattern="^quick_order_menu$"))
@@ -642,10 +637,9 @@ def main():
             CallbackQueryHandler(quick_order_apply, pattern="^quick_order_apply_"),
             CallbackQueryHandler(save_strength_callback, pattern=r"^strength_"),
             CallbackQueryHandler(save_draft_callback, pattern=r"^draft_"),
-            CallbackQueryHandler(table_digit_callback, pattern="^table_digit_"),
         ],
         states={
-            TABLE: [CallbackQueryHandler(table_digit_callback, pattern="^table_digit_")],
+            TABLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_table_field)],
             AROMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_field)],
             STRENGTH: [CallbackQueryHandler(save_strength_callback, pattern=r"^strength_")],
             BOWL: [
@@ -665,5 +659,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
